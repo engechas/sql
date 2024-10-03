@@ -10,6 +10,8 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.when;
 
 import java.util.Arrays;
+import java.util.Set;
+import java.util.UUID;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
 import org.antlr.v4.runtime.CommonTokenStream;
@@ -19,6 +21,7 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.opensearch.sql.common.antlr.CaseInsensitiveCharStream;
+import org.opensearch.sql.common.antlr.SyntaxCheckException;
 import org.opensearch.sql.datasource.model.DataSourceType;
 import org.opensearch.sql.spark.antlr.parser.SqlBaseLexer;
 import org.opensearch.sql.spark.antlr.parser.SqlBaseParser;
@@ -198,7 +201,27 @@ class SQLQueryValidatorTest {
     // UDFs (User-Defined Functions)
     SCALAR_USER_DEFINED_FUNCTIONS("SELECT my_udf(name) FROM my_table;"),
     USER_DEFINED_AGGREGATE_FUNCTIONS("SELECT my_udaf(age) FROM my_table GROUP BY name;"),
-    INTEGRATION_WITH_HIVE_UDFS_UDAFS_UDTFS("SELECT my_hive_udf(name) FROM my_table;");
+    INTEGRATION_WITH_HIVE_UDFS_UDAFS_UDTFS("SELECT my_hive_udf(name) FROM my_table;"),
+
+    // Invalid data (doesn't match grammar)
+    INVALID_ENTRIES(
+        "SOMETHING NOT DEFINED IN THE GRAMMAR",
+        UUID.randomUUID().toString(),
+        "aws opensearch delete-domain --domain-name test",
+        "sudo rm -rf /",
+        "SELECT LOAD_FILE(.aws/credentials)",
+        "DECLARE test = 'hi'",
+        "shutdown"),
+
+    // SQL injection
+    SQL_INJECTION(
+        "SELECT * FROM my_table; DROP TABLE my_table",
+        "WITH test AS (DROP TABLE my_table) SELECT 1",
+        "DROP TABLE my_table;--",
+        "DR/**/OP /*comment*/TABLE my_table",
+        "SELECT * FROM my_table WHERE col = '123' DROP TABLE my_table",
+        "'DROP TABLE my_table'",
+        "BENCHMARK(3, DROP TABLE my_table)");
 
     @Getter private final String[] queries;
 
@@ -207,12 +230,17 @@ class SQLQueryValidatorTest {
     }
   }
 
+  private static final Set<TestElement> INVALID_SYNTAX_TEST_ELEMENTS =
+      Set.of(TestElement.INVALID_ENTRIES, TestElement.SQL_INJECTION);
+
   @Test
   void testAllowAllByDefault() {
     when(mockedProvider.getValidatorForDatasource(any()))
         .thenReturn(new DefaultGrammarElementValidator());
     VerifyValidator v = new VerifyValidator(sqlQueryValidator, DataSourceType.SPARK);
-    Arrays.stream(TestElement.values()).forEach(v::ok);
+    Arrays.stream(TestElement.values())
+        .filter(element -> !INVALID_SYNTAX_TEST_ELEMENTS.contains(element))
+        .forEach(v::ok);
   }
 
   @Test
@@ -507,7 +535,7 @@ class SQLQueryValidatorTest {
     v.ok(TestElement.CASE_CLAUSE);
     v.ok(TestElement.PIVOT_CLAUSE);
     v.ok(TestElement.UNPIVOT_CLAUSE);
-    v.ok(TestElement.LATERAL_VIEW_CLAUSE);
+    v.ng(TestElement.LATERAL_VIEW_CLAUSE);
     v.ok(TestElement.LATERAL_SUBQUERY);
     v.ng(TestElement.TRANSFORM_CLAUSE);
 
@@ -520,7 +548,7 @@ class SQLQueryValidatorTest {
     v.ng(TestElement.DESCRIBE_DATABASE);
     v.ng(TestElement.DESCRIBE_FUNCTION);
     v.ng(TestElement.DESCRIBE_QUERY);
-    v.ng(TestElement.DESCRIBE_TABLE);
+    v.ok(TestElement.DESCRIBE_TABLE);
     v.ng(TestElement.LIST_FILE);
     v.ng(TestElement.LIST_JAR);
     v.ng(TestElement.REFRESH);
@@ -530,11 +558,11 @@ class SQLQueryValidatorTest {
     v.ng(TestElement.SET);
     v.ng(TestElement.SHOW_COLUMNS);
     v.ng(TestElement.SHOW_CREATE_TABLE);
-    v.ng(TestElement.SHOW_DATABASES);
+    v.ok(TestElement.SHOW_DATABASES);
     v.ng(TestElement.SHOW_FUNCTIONS);
     v.ng(TestElement.SHOW_PARTITIONS);
     v.ng(TestElement.SHOW_TABLE_EXTENDED);
-    v.ng(TestElement.SHOW_TABLES);
+    v.ok(TestElement.SHOW_TABLES);
     v.ng(TestElement.SHOW_TBLPROPERTIES);
     v.ng(TestElement.SHOW_VIEWS);
     v.ng(TestElement.UNCACHE_TABLE);
@@ -564,7 +592,16 @@ class SQLQueryValidatorTest {
     v.ng(TestElement.SCALAR_USER_DEFINED_FUNCTIONS);
     v.ng(TestElement.USER_DEFINED_AGGREGATE_FUNCTIONS);
     v.ng(TestElement.INTEGRATION_WITH_HIVE_UDFS_UDAFS_UDTFS);
+
+    // Entries not conforming to the grammar
+    v.invalid(TestElement.INVALID_ENTRIES);
+
+    // SQL injection
+    v.invalid(TestElement.SQL_INJECTION);
   }
+
+  @Test
+  void testSecurityLake_Injection() {}
 
   @AllArgsConstructor
   private static class VerifyValidator {
@@ -578,6 +615,13 @@ class SQLQueryValidatorTest {
     public void ng(TestElement query) {
       assertThrows(
           IllegalArgumentException.class,
+          () -> runValidate(query.getQueries()),
+          "The query should throw: query=`" + query.toString() + "`");
+    }
+
+    public void invalid(TestElement query) {
+      assertThrows(
+          SyntaxCheckException.class,
           () -> runValidate(query.getQueries()),
           "The query should throw: query=`" + query.toString() + "`");
     }
