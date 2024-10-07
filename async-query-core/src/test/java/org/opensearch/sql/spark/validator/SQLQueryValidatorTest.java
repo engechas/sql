@@ -8,7 +8,9 @@ package org.opensearch.sql.spark.validator;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.when;
+import static org.opensearch.sql.spark.utils.TestUtils.getJson;
 
+import java.io.IOException;
 import java.util.Arrays;
 import java.util.Set;
 import java.util.UUID;
@@ -221,7 +223,25 @@ class SQLQueryValidatorTest {
         "DR/**/OP /*comment*/TABLE my_table",
         "SELECT * FROM my_table WHERE col = '123' DROP TABLE my_table",
         "'DROP TABLE my_table'",
-        "BENCHMARK(3, DROP TABLE my_table)");
+        "BENCHMARK(3, DROP TABLE my_table)"),
+
+    // Valid SecurityLake queries
+    VALID_SECURITY_LAKE(getValidSecurityLakeQueries()),
+
+    // Flint extension
+    FLINT_EXTENSION_VALID(
+        "CREATE MATERIALIZED VIEW mv1 AS SELECT COUNT(*) AS count FROM"
+            + " amazon_security_lake_glue_db_us_east_1.amazon_security_lake_table_us_east_1_vpc_flow_2_0"
+            + " GROUP BY TUMBLE(time_dt, '10 Minutes') WITH ( auto_refresh = true,"
+            + " checkpoint_location ="
+            + " 's3://aws-security-data-lake-us-east-1-odwvchizbg9hprglog8qupqsvfgwxw/checkpoint12',"
+            + " watermark_delay = '1 Second' )"),
+    FLINT_EXTENSION_INVALID(
+        "CREATE MATERIALIZED VIEW mv1 AS DROP TABLE"
+            + " amazon_security_lake_table_us_east_1_vpc_flow_2_0 WITH ( auto_refresh = true,"
+            + " checkpoint_location ="
+            + " 's3://aws-security-data-lake-us-east-1-odwvchizbg9hprglog8qupqsvfgwxw/checkpoint12',"
+            + " watermark_delay = '1 Second' )");
 
     @Getter private final String[] queries;
 
@@ -230,8 +250,12 @@ class SQLQueryValidatorTest {
     }
   }
 
-  private static final Set<TestElement> INVALID_SYNTAX_TEST_ELEMENTS =
-      Set.of(TestElement.INVALID_ENTRIES, TestElement.SQL_INJECTION);
+  private static final Set<TestElement> INVALID_SPARK_SQL_SYNTAX_TEST_ELEMENTS =
+      Set.of(
+          TestElement.INVALID_ENTRIES,
+          TestElement.SQL_INJECTION,
+          TestElement.FLINT_EXTENSION_INVALID,
+          TestElement.FLINT_EXTENSION_VALID);
 
   @Test
   void testAllowAllByDefault() {
@@ -239,7 +263,7 @@ class SQLQueryValidatorTest {
         .thenReturn(new DefaultGrammarElementValidator());
     VerifyValidator v = new VerifyValidator(sqlQueryValidator, DataSourceType.SPARK);
     Arrays.stream(TestElement.values())
-        .filter(element -> !INVALID_SYNTAX_TEST_ELEMENTS.contains(element))
+        .filter(element -> !INVALID_SPARK_SQL_SYNTAX_TEST_ELEMENTS.contains(element))
         .forEach(v::ok);
   }
 
@@ -479,40 +503,41 @@ class SQLQueryValidatorTest {
 
   @Test
   void testSecurityLakeQueries() {
-    when(mockedProvider.getValidatorForDatasource(any()))
-        .thenReturn(new SecurityLakeGrammarElementValidator());
     VerifyValidator v = new VerifyValidator(sqlQueryValidator, DataSourceType.SECURITY_LAKE);
 
+    // Valid query list
+    v.ok(TestElement.VALID_SECURITY_LAKE);
+
     // DDL Statements
-    v.ng(TestElement.ALTER_DATABASE);
-    v.ng(TestElement.ALTER_TABLE);
-    v.ng(TestElement.ALTER_VIEW);
-    v.ng(TestElement.CREATE_DATABASE);
-    v.ng(TestElement.CREATE_FUNCTION);
-    v.ng(TestElement.CREATE_TABLE);
-    v.ng(TestElement.CREATE_VIEW);
-    v.ng(TestElement.DROP_DATABASE);
-    v.ng(TestElement.DROP_FUNCTION);
-    v.ng(TestElement.DROP_TABLE);
-    v.ng(TestElement.DROP_VIEW);
-    v.ng(TestElement.REPAIR_TABLE);
-    v.ng(TestElement.TRUNCATE_TABLE);
+    v.invalid(TestElement.ALTER_DATABASE);
+    v.invalid(TestElement.ALTER_TABLE);
+    v.invalid(TestElement.ALTER_VIEW);
+    v.invalid(TestElement.CREATE_DATABASE);
+    v.invalid(TestElement.CREATE_FUNCTION);
+    v.invalid(TestElement.CREATE_TABLE);
+    v.invalid(TestElement.CREATE_VIEW);
+    v.invalid(TestElement.DROP_DATABASE);
+    v.invalid(TestElement.DROP_FUNCTION);
+    v.invalid(TestElement.DROP_TABLE);
+    v.invalid(TestElement.DROP_VIEW);
+    v.invalid(TestElement.REPAIR_TABLE);
+    v.invalid(TestElement.TRUNCATE_TABLE);
 
     // DML Statements
-    v.ng(TestElement.INSERT_TABLE);
-    v.ng(TestElement.INSERT_OVERWRITE_DIRECTORY);
-    v.ng(TestElement.LOAD);
+    v.invalid(TestElement.INSERT_TABLE);
+    v.invalid(TestElement.INSERT_OVERWRITE_DIRECTORY);
+    v.invalid(TestElement.LOAD);
 
     // Data Retrieval
     v.ok(TestElement.SELECT);
     v.ok(TestElement.EXPLAIN);
     v.ok(TestElement.COMMON_TABLE_EXPRESSION);
-    v.ng(TestElement.CLUSTER_BY_CLAUSE);
-    v.ng(TestElement.DISTRIBUTE_BY_CLAUSE);
+    v.invalid(TestElement.CLUSTER_BY_CLAUSE);
+    v.invalid(TestElement.DISTRIBUTE_BY_CLAUSE);
     v.ok(TestElement.GROUP_BY_CLAUSE);
     v.ok(TestElement.HAVING_CLAUSE);
-    v.ng(TestElement.HINTS);
-    v.ng(TestElement.INLINE_TABLE);
+    v.invalid(TestElement.HINTS);
+    v.invalid(TestElement.INLINE_TABLE);
     v.ng(TestElement.FILE);
     v.ok(TestElement.INNER_JOIN);
     v.ok(TestElement.CROSS_JOIN);
@@ -527,45 +552,45 @@ class SQLQueryValidatorTest {
     v.ok(TestElement.ORDER_BY_CLAUSE);
     v.ok(TestElement.SET_OPERATORS);
     v.ok(TestElement.SORT_BY_CLAUSE);
-    v.ng(TestElement.TABLESAMPLE);
-    v.ng(TestElement.TABLE_VALUED_FUNCTION);
+    v.invalid(TestElement.TABLESAMPLE);
+    v.ok(TestElement.TABLE_VALUED_FUNCTION);
     v.ok(TestElement.WHERE_CLAUSE);
     v.ok(TestElement.AGGREGATE_FUNCTION);
     v.ok(TestElement.WINDOW_FUNCTION);
     v.ok(TestElement.CASE_CLAUSE);
     v.ok(TestElement.PIVOT_CLAUSE);
     v.ok(TestElement.UNPIVOT_CLAUSE);
-    v.ng(TestElement.LATERAL_VIEW_CLAUSE);
+    v.ok(TestElement.LATERAL_VIEW_CLAUSE);
     v.ok(TestElement.LATERAL_SUBQUERY);
-    v.ng(TestElement.TRANSFORM_CLAUSE);
+    v.invalid(TestElement.TRANSFORM_CLAUSE);
 
     // Auxiliary Statements
-    v.ng(TestElement.ADD_FILE);
-    v.ng(TestElement.ADD_JAR);
-    v.ng(TestElement.ANALYZE_TABLE);
-    v.ng(TestElement.CACHE_TABLE);
-    v.ng(TestElement.CLEAR_CACHE);
-    v.ng(TestElement.DESCRIBE_DATABASE);
-    v.ng(TestElement.DESCRIBE_FUNCTION);
-    v.ng(TestElement.DESCRIBE_QUERY);
+    v.invalid(TestElement.ADD_FILE);
+    v.invalid(TestElement.ADD_JAR);
+    v.invalid(TestElement.ANALYZE_TABLE);
+    v.invalid(TestElement.CACHE_TABLE);
+    v.invalid(TestElement.CLEAR_CACHE);
+    v.invalid(TestElement.DESCRIBE_DATABASE);
+    v.invalid(TestElement.DESCRIBE_FUNCTION);
+    v.invalid(TestElement.DESCRIBE_QUERY);
     v.ok(TestElement.DESCRIBE_TABLE);
-    v.ng(TestElement.LIST_FILE);
-    v.ng(TestElement.LIST_JAR);
-    v.ng(TestElement.REFRESH);
-    v.ng(TestElement.REFRESH_TABLE);
-    v.ng(TestElement.REFRESH_FUNCTION);
-    v.ng(TestElement.RESET);
-    v.ng(TestElement.SET);
-    v.ng(TestElement.SHOW_COLUMNS);
-    v.ng(TestElement.SHOW_CREATE_TABLE);
+    v.invalid(TestElement.LIST_FILE);
+    v.invalid(TestElement.LIST_JAR);
+    v.invalid(TestElement.REFRESH);
+    v.invalid(TestElement.REFRESH_TABLE);
+    v.invalid(TestElement.REFRESH_FUNCTION);
+    v.invalid(TestElement.RESET);
+    v.invalid(TestElement.SET);
+    v.ok(TestElement.SHOW_COLUMNS);
+    v.invalid(TestElement.SHOW_CREATE_TABLE);
     v.ok(TestElement.SHOW_DATABASES);
-    v.ng(TestElement.SHOW_FUNCTIONS);
-    v.ng(TestElement.SHOW_PARTITIONS);
-    v.ng(TestElement.SHOW_TABLE_EXTENDED);
+    v.invalid(TestElement.SHOW_FUNCTIONS);
+    v.ok(TestElement.SHOW_PARTITIONS);
+    v.ok(TestElement.SHOW_TABLE_EXTENDED);
     v.ok(TestElement.SHOW_TABLES);
-    v.ng(TestElement.SHOW_TBLPROPERTIES);
-    v.ng(TestElement.SHOW_VIEWS);
-    v.ng(TestElement.UNCACHE_TABLE);
+    v.ok(TestElement.SHOW_TBLPROPERTIES);
+    v.invalid(TestElement.SHOW_VIEWS);
+    v.invalid(TestElement.UNCACHE_TABLE);
 
     // Functions
     v.ok(TestElement.ARRAY_FUNCTIONS);
@@ -598,10 +623,13 @@ class SQLQueryValidatorTest {
 
     // SQL injection
     v.invalid(TestElement.SQL_INJECTION);
-  }
 
-  @Test
-  void testSecurityLake_Injection() {}
+    VerifyFlintValidator fv =
+        new VerifyFlintValidator(new FlintExtensionQueryValidator(), DataSourceType.SECURITY_LAKE);
+
+    fv.ok(TestElement.FLINT_EXTENSION_VALID);
+    fv.invalid(TestElement.FLINT_EXTENSION_INVALID);
+  }
 
   @AllArgsConstructor
   private static class VerifyValidator {
@@ -639,6 +667,43 @@ class SQLQueryValidatorTest {
           new SqlBaseParser(
               new CommonTokenStream(new SqlBaseLexer(new CaseInsensitiveCharStream(query))));
       return sqlBaseParser.singleStatement();
+    }
+  }
+
+  private static String[] getValidSecurityLakeQueries() {
+    try {
+      final String queriesAsString = getJson("sample-queries.txt");
+      return queriesAsString.split(System.lineSeparator());
+    } catch (final IOException e) {
+      throw new RuntimeException(e);
+    }
+  }
+
+  @AllArgsConstructor
+  private static class VerifyFlintValidator {
+    private final FlintExtensionQueryValidator validator;
+    private final DataSourceType dataSourceType;
+
+    public void ok(TestElement query) {
+      runValidate(query.getQueries());
+    }
+
+    public void ng(TestElement query) {
+      assertThrows(
+          IllegalArgumentException.class,
+          () -> runValidate(query.getQueries()),
+          "The query should throw: query=`" + query.toString() + "`");
+    }
+
+    public void invalid(TestElement query) {
+      assertThrows(
+          SyntaxCheckException.class,
+          () -> runValidate(query.getQueries()),
+          "The query should throw: query=`" + query.toString() + "`");
+    }
+
+    void runValidate(String[] queries) {
+      Arrays.stream(queries).forEach(query -> validator.validate(query, dataSourceType));
     }
   }
 }

@@ -5,6 +5,8 @@
 
 package org.opensearch.sql.spark.validator;
 
+import static org.opensearch.sql.spark.validator.ValidationVisitorHelper.isFileReference;
+
 import lombok.AllArgsConstructor;
 import org.opensearch.sql.spark.antlr.parser.SqlBaseParser;
 import org.opensearch.sql.spark.antlr.parser.SqlBaseParser.AddTableColumnsContext;
@@ -323,12 +325,6 @@ public class SQLQueryValidationVisitor extends SqlBaseParserBaseVisitor<Void> {
       validateAllowed(GrammarElement.FILE);
     }
     return super.visitTableName(ctx);
-  }
-
-  private static final String FILE_REFERENCE_PATTERN = "^[a-zA-Z]+\\.`[^`]+`$";
-
-  private boolean isFileReference(String reference) {
-    return reference.matches(FILE_REFERENCE_PATTERN);
   }
 
   @Override

@@ -114,7 +114,8 @@ public enum FunctionType {
                   "ntile",
                   "percent_rank",
                   "rank",
-                  "row_number"))
+                  "row_number",
+                  "tumble"))
           .put(
               ARRAY,
               Set.of(

@@ -23,6 +23,7 @@ import org.opensearch.sql.spark.dispatcher.model.JobType;
 import org.opensearch.sql.spark.execution.session.SessionManager;
 import org.opensearch.sql.spark.rest.model.LangType;
 import org.opensearch.sql.spark.utils.SQLQueryUtils;
+import org.opensearch.sql.spark.validator.FlintExtensionQueryValidator;
 import org.opensearch.sql.spark.validator.SQLQueryValidator;
 
 /** This class takes care of understanding query and dispatching job query to emr serverless. */
@@ -51,6 +52,7 @@ public class SparkQueryDispatcher {
       String query = dispatchQueryRequest.getQuery();
 
       if (SQLQueryUtils.isFlintExtensionQuery(query)) {
+        new FlintExtensionQueryValidator().validate(query, dataSourceMetadata.getConnector());
         return handleFlintExtensionQuery(
             dispatchQueryRequest, asyncQueryRequestContext, dataSourceMetadata);
       }
